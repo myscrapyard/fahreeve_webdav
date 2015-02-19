@@ -1,25 +1,27 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 
-WORK_DIR = "files"
-WORK_PATH = os.getcwd() + os.path.sep + WORK_DIR + os.path.sep
+FILE_DIR = "files"
+FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 ALLOW_DIRS = []
+
+def get_absolute_path(path):
+    return os.path.join(FILE_PATH, *path[1:].split('/'))
+
 
 class WebDavHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        path = self.path[1:]
         try:
-            if not path:
+            if not self.path or self.path == "/":
                 raise IOError
-            file = open(WORK_PATH + self.path, "rb").read()
+            file = open(get_absolute_path(self.path), "rb").read()
         except IOError:
-            self.send_error(404,"File Not Found: %s" % path)
+            self.send_error(404,"File Not Found: %s" % self.path)
         else:
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
             self.end_headers()
             self.wfile.write(file)
-
 
     def do_POST(self):
         pass
@@ -31,7 +33,15 @@ class WebDavHandler(BaseHTTPRequestHandler):
         pass
 
     def do_DELETE(self):
-        pass
+        path = get_absolute_path(self.path)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            self.send_error(404,"File Not Found: %s" % self.path)
+        except OSError:
+            os.removedirs(path)
+        self.send_response(200)
+        self.end_headers()
 
     def do_PROPFIND(self):
         pass
@@ -48,8 +58,9 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
      try:
-         server = HTTPServer(("", 8080), WebDavHandler)
-         print("started httpserver...")
+         port = 8080
+         server = HTTPServer(("", port), WebDavHandler)
+         print("started httpserver: http://localhost:%d".format(port))
          server.serve_forever()
      except KeyboardInterrupt:
          print("^C received, shutting down server")
