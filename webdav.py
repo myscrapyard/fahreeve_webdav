@@ -1,3 +1,4 @@
+import cgi
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 
@@ -6,7 +7,7 @@ FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 ALLOW_DIRS = []
 
 def get_absolute_path(path):
-    return os.path.join(FILE_PATH, *path[1:].split('/'))
+    return os.path.join(FILE_PATH, *path.split('/'))
 
 
 class WebDavHandler(BaseHTTPRequestHandler):
@@ -16,7 +17,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 raise IOError
             file = open(get_absolute_path(self.path), "rb").read()
         except IOError:
-            self.send_error(404,"File Not Found: %s" % self.path)
+            self.send_error(404,"File Not Found: {}".format(self.path))
         else:
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
@@ -24,20 +25,35 @@ class WebDavHandler(BaseHTTPRequestHandler):
             self.wfile.write(file)
 
     def do_POST(self):
-        pass
+        self.do_PUT()
 
     def do_HEAD(self):
         self.send_response(200)
 
     def do_PUT(self):
-        pass
+        try:
+            if self.path.endswith('/'):
+                raise IOError
+            file = open(get_absolute_path(self.path), "wb")
+        except IOError:
+            self.send_error(404,"File Not Found or Not Created: {}".format(self.path))
+        else:
+            form = cgi.FieldStorage(fp=self.rfile,
+                                    headers=self.headers,
+                                    environ={'REQUEST_METHOD':'PUT',
+                                             'CONTENT_TYPE':self.headers['Content-Type'],}
+                                    )
+            self.send_response(200)
+            self.end_headers()
+            file.write(form['file'].file.read())
+            file.close()
 
     def do_DELETE(self):
         path = get_absolute_path(self.path)
         try:
             os.remove(path)
         except FileNotFoundError:
-            self.send_error(404,"File Not Found: %s" % self.path)
+            self.send_error(404,"File Not Found: {}".format(self.path))
         except OSError:
             os.removedirs(path)
         self.send_response(200)
@@ -60,7 +76,7 @@ if __name__ == "__main__":
      try:
          port = 8080
          server = HTTPServer(("", port), WebDavHandler)
-         print("started httpserver: http://localhost:%d".format(port))
+         print("started httpserver: http://localhost:{}".format(port))
          server.serve_forever()
      except KeyboardInterrupt:
          print("^C received, shutting down server")
