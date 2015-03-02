@@ -1,6 +1,7 @@
 import cgi
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
+import shutil
 
 FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
@@ -63,13 +64,29 @@ class WebDavHandler(BaseHTTPRequestHandler):
         pass
 
     def do_MKCOL(self):
-        pass
+        try:
+            os.mkdir(get_absolute_path(self.path))
+        except OSError:
+            self.send_response(403)
+        else:
+            self.send_response(200)
+        self.end_headers()
 
     def do_COPY(self):
-        pass
+        try:
+            shutil.copy2(get_absolute_path(self.path), get_absolute_path(self.headers['Destination']))
+        except FileNotFoundError:
+            self.send_response(403)
+        self.send_response(200)
+        self.end_headers()
 
     def do_MOVE(self):
-        pass
+        try:
+            shutil.move(get_absolute_path(self.path), get_absolute_path(self.headers['Destination']))
+        except FileNotFoundError:
+            self.send_response(403)
+        self.send_response(200)
+        self.end_headers()
 
 
 if __name__ == "__main__":
