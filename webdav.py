@@ -60,6 +60,12 @@ class WebDavHandler(BaseHTTPRequestHandler):
             file.close()
 
     def do_DELETE(self):
+        if self.path == '' or self.path == '/':
+            self.send_error(404, 'Object not found')
+            self.send_header('Content-length', '0')
+            self.end_headers()
+            return
+
         path = get_absolute_path(self.path)
 
         if os.path.isfile(path):
