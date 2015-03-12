@@ -12,6 +12,16 @@ def get_absolute_path(path):
 
 
 class WebDavHandler(BaseHTTPRequestHandler):
+    server_version = 'PythonWebDav 0.1 alpha'
+
+    def do_OPTIONS(self):
+        self.send_response(200, WebDavHandler.server_version)
+        self.send_header('Allow', 'GET, HEAD, POST, PUT, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MOVE, COPY')
+        self.send_header('Content-length', '0')
+        self.send_header('DAV', '1,2')
+        self.send_header('MS-Author-Via', 'DAV')
+        self.end_headers()
+
     def do_GET(self):
         try:
             if not self.path or self.path == "/":
@@ -51,13 +61,16 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = get_absolute_path(self.path)
-        try:
+
+        if os.path.isfile(path):
             os.remove(path)
-        except FileNotFoundError:
-            self.send_error(404,"File Not Found: {}".format(self.path))
-        except OSError:
-            os.removedirs(path)
-        self.send_response(200)
+            self.send_response(204, 'No Content')
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
+            self.send_response(204, 'No Content')
+        else:
+            self.send_response(404,'Not Found')
+        self.send_header('Content-length', '0')
         self.end_headers()
 
     def do_PROPFIND(self):
