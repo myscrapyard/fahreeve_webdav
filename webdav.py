@@ -42,19 +42,23 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_response(200)
 
     def do_PUT(self):
+        if self.path.endswith('/'):
+            self.send_response(400, 'Cannot parse request')
+            self.send_header('Content-length', '0')
+            self.end_headers()
+            return
         try:
-            if self.path.endswith('/'):
-                raise IOError
             file = open(get_absolute_path(self.path), "wb")
         except IOError:
-            self.send_error(404,"File Not Found or Not Created: {}".format(self.path))
+            self.send_error(500, 'Cannot save file')
         else:
             form = cgi.FieldStorage(fp=self.rfile,
                                     headers=self.headers,
                                     environ={'REQUEST_METHOD':'PUT',
                                              'CONTENT_TYPE':self.headers['Content-Type'],}
                                     )
-            self.send_response(200)
+            self.send_response(201, 'Created')
+            self.send_header('Content-length', '0')
             self.end_headers()
             file.write(form['file'].file.read())
             file.close()
