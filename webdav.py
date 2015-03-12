@@ -77,28 +77,36 @@ class WebDavHandler(BaseHTTPRequestHandler):
         pass
 
     def do_MKCOL(self):
-        try:
-            os.mkdir(get_absolute_path(self.path))
-        except OSError:
-            self.send_response(403)
-        else:
-            self.send_response(200)
+        if self.path != '' or self.path != '/':
+            path = get_absolute_path(self.path)
+            if not os.path.isdir(path):
+                os.mkdir(path)
+                self.send_response(201, "Created")
+                self.send_header('Content-length', '0')
+                self.end_headers()
+                return
+        self.send_response(403, "OK")
+        self.send_header('Content-length', '0')
         self.end_headers()
 
     def do_COPY(self):
-        try:
-            shutil.copy2(get_absolute_path(self.path), get_absolute_path(self.headers['Destination']))
-        except FileNotFoundError:
-            self.send_response(403)
-        self.send_response(200)
+        oldpath = get_absolute_path(self.path)
+        newpath = get_absolute_path(self.headers['Destination'])
+        if (os.path.isfile(oldpath)==True):
+            shutil.copyfile(oldpath, newpath)
+        self.send_response(201, "Created")
+        self.send_header('Content-length', '0')
         self.end_headers()
 
     def do_MOVE(self):
-        try:
-            shutil.move(get_absolute_path(self.path), get_absolute_path(self.headers['Destination']))
-        except FileNotFoundError:
-            self.send_response(403)
-        self.send_response(200)
+        oldpath = get_absolute_path(self.path)
+        newpath = get_absolute_path(self.headers['Destination'])
+        if os.path.isfile(oldpath) and not os.path.isfile(newpath):
+            shutil.move(oldpath, newpath)
+        if os.path.isdir(oldpath) and not os.path.isdir(newpath):
+            os.rename(oldpath, newpath)
+        self.send_response(201, "Created")
+        self.send_header('Content-length', '0')
         self.end_headers()
 
 
