@@ -99,7 +99,7 @@ class BufWriter:
         self.w = w
         self.buf = StringIO(u'')
         self.debug = debug
-        if headers is not None:
+        if debug and headers is not None:
             sys.stderr.write('\n' +     str(headers))
 
     def write(self, s):
