@@ -33,6 +33,7 @@ class File:
 
 
 class DirCollection:
+    MIME_TYPE = 'httpd/unix-directory'
     def __init__(self, fsdir, virdir, parent=None):
         if not os.path.exists(fsdir):
             raise "Local directory (fsdir) not found: " + fsdir
@@ -56,7 +57,7 @@ class DirCollection:
                       'getetag' : hashlib.md5(self.realname.encode()).hexdigest(),
                       'resourcetype' : '<D:collection/>',
                       'iscollection' : 1,
-                      'getcontenttype' : 'httpd/unix-directory',}
+                      'getcontenttype' : self.MIME_TYPE,}
         if self.name[0] == ".":
             properties['ishidden'] = 1
         if not os.access(self.realname, os.W_OK):
@@ -66,32 +67,52 @@ class DirCollection:
         return properties
 
     def getMembers(self):
-        listmembers = os.listdir(self.realname) # get all files and dirs in current directory
-        for i, name in enumerate(listmembers):
-            if os.path.isdir(self.realname + name):
-                listmembers[i] = listmembers[i] + '/'
         members = []
-        for name in listmembers:
-            if name[-1] == '/':
-                members.append(DirCollection(self.realname + name, self.virtualname + name, self))
+        for i in range(len(os.listdir(self.realname))):
+            if os.path.isdir(self.realname + members[i]):
+                members.append(DirCollection(self.realname + members[i] + '/',
+                                             self.virtualname + members[i] + '/',
+                                             self))
             else:
-                members.append(File(name, self))
+                members.append(File(members[i], self))
         return members
 
+    def getMembers(self):
+        """Get immediate members of this collection."""
+        l = os.listdir(self.realname) # obtain a copy of dirlist
+        tcount=0
+        for tmpi in l:
+            if os.path.isdir(self.realname+tmpi):
+                l[tcount]=l[tcount]+'/'
+            tcount += 1
+        r = []
+        for f in l:
+            if f[-1] != '/':
+                m = File(f, self) # Member is a file
+            else:
+                m = DirCollection(self.realname + f, self.virtualname + f, self) # Member is a collection
+            r.append(m)
+        return r
+
     def findMember(self, name):
-        listmembers = os.listdir(self.realname)
-        for i, name in enumerate(listmembers):
-            if os.path.isdir(self.realname + name):
-                listmembers[i] = listmembers[i] + '/'
+        listmembers = os.listdir(self.realname) # obtain a copy of dirlist
+        for i in range(len(listmembers)):
+            if os.path.isdir(self.realname + listmembers[i]):
+                listmembers[i] += '/'
         if name in listmembers:
             if name[-1] != '/':
                 return File(name, self)
             else:
-                return DirCollection(self.realname + name, self.virtualname + name, self)
+                return DirCollection(self.realname + name,
+                                     self.virtualname + name,
+                                     self)
         elif name[-1] != '/':
             name += '/'
             if name in listmembers:
-                return DirCollection(self.realname + name, self.virtualname + name, self)
+                return DirCollection(self.realname + name,
+                                     self.virtualname + name,
+                                     self)
+
 
 
 class BufWriter:
@@ -100,7 +121,7 @@ class BufWriter:
         self.buf = StringIO(u'')
         self.debug = debug
         if debug and headers is not None:
-            sys.stderr.write('\n' +     str(headers))
+            sys.stderr.write('\n' + str(headers))
 
     def write(self, s):
         if self.debug:
@@ -131,6 +152,40 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_header('DAV', '1,2')
         self.send_header('MS-Author-Via', 'DAV')
         self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
+
+    def do_POST(self):
+        self.do_PUT()
+
+    def do_HEAD(self):
+        #self.send_response(200)
+        #self.send_header('Content-length', '0')
+        #self.end_headers()
+
+        path, elem = self.path_elem()
+        if not elem:
+            self.send_error(404, 'Object not found')
+            return
+        try:
+            props = elem.getProperties()
+        except:
+            self.send_response(500, "Error retrieving properties")
+            self.end_headers()
+            return
+        if elem is File:
+            self.send_header("Content-type", props['getcontenttype'])
+            self.send_header("Last-modified", props['getlastmodified'])
+        else:
+            try:
+                type = props['getcontenttype']
+            except:
+                type = DirCollection.MIME_TYPE
+            self.send_header("Content-type", type)
+        self.send_response(200, 'OK')
+        self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_GET(self):
         try:
@@ -140,18 +195,10 @@ class WebDavHandler(BaseHTTPRequestHandler):
         except IOError:
             self.send_error(404,"File Not Found: {}".format(self.path))
         else:
-            self.send_response(200)
-            self.send_header("Content-type", "application/octet-stream")
-            self.end_headers()
+            self.do_HEAD()
             self.wfile.write(file)
-
-    def do_POST(self):
-        self.do_PUT()
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header('Content-length', '0')
-        self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_PUT(self):
         if self.path.endswith('/'):
@@ -174,6 +221,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
             self.end_headers()
             file.write(form['file'].file.read())
             file.close()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_DELETE(self):
         if self.path == '' or self.path == '/':
@@ -194,6 +243,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
             self.send_response(404,'Not Found')
         self.send_header('Content-length', '0')
         self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_PROPFIND(self):
         depth = 'infinity'
@@ -224,7 +275,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             else:
-                elem = get_absolute_path()
+                elem = get_absolute_path('')
         if depth != '0' and not elem:   #or elem.type != Member.M_COLLECTION:
             self.send_response(406, 'This is not allowed')
             self.send_header('Content-length', '0')
@@ -238,7 +289,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
         w.write('<D:multistatus xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">\n')
 
         def write_props_member(w, m):
-            w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.virtualname))
+            w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
             props = m.getProperties()       # get the file or dir props
             if ('quota-available-bytes' in wished_props) or ('quota-used-bytes'in wished_props) or \
                     ('quota' in wished_props) or ('quotaused'in wished_props):
@@ -256,6 +307,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
         write_props_member(w, elem)
         if depth == '1':
+            if type(elem) == File:
+                pass
             for m in elem.getMembers():
                 write_props_member(w,m)
         w.write('</D:multistatus>')
@@ -275,6 +328,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_response(403, "OK")
         self.send_header('Content-length', '0')
         self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_COPY(self):
         oldpath = get_absolute_path(self.path)
@@ -284,6 +339,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_response(201, "Created")
         self.send_header('Content-length', '0')
         self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def do_MOVE(self):
         oldpath = get_absolute_path(self.path)
@@ -295,6 +352,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_response(201, "Created")
         self.send_header('Content-length', '0')
         self.end_headers()
+        if DEBUG:
+            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def path_elem(self):
         #Returns split path and Member object of the last element
@@ -347,9 +406,8 @@ if __name__ == "__main__":
         url = ''
     try:
         server = HTTPServer((url, port), WebDavHandler)
-        print("started httpserver: http://127.0.1.1:{}".format(port))
+        print("started webdav server: http://127.0.1.1:{}".format(port))
         server.serve_forever()
-        print("...")
     except KeyboardInterrupt:
         print("received, shutting down server")
         server.shutdown()
