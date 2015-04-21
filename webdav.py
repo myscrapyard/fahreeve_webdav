@@ -113,6 +113,25 @@ class DirCollection:
                                      self.virtualname + name,
                                      self)
 
+    def saveMember(self, rfile, name, size, req):
+        # save a member file
+        fname = os.path.join(self.realname, urllib.parse.unquote(name))
+        f = open(fname, 'wb')
+        if size > 0:    # if size=0 ,just save a empty file.
+            writ = 0
+            bs = 65536
+            while True:
+                if size != -1 and (bs > size - writ):
+                    bs = size - writ
+                buf = rfile.read(bs)
+                if len(buf) == 0:
+                    break
+                f.write(buf)
+                writ += len(buf)
+                if size != -1 and writ >= size:
+                    break
+        f.close()
+
 
 
 class BufWriter:
@@ -137,6 +156,7 @@ class BufWriter:
     def getSize(self):
         return len(self.buf.getvalue().encode('utf-8'))
 
+
 class WebDavHandler(BaseHTTPRequestHandler):
     server_version = 'PythonWebDav 0.1 alpha'
     all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly', 'getcontenttype',
@@ -158,34 +178,40 @@ class WebDavHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.do_PUT()
 
-    def do_HEAD(self):
+    def do_HEAD(self, GET=False):
         #self.send_response(200)
         #self.send_header('Content-length', '0')
         #self.end_headers()
 
         path, elem = self.path_elem()
         if not elem:
-            self.send_error(404, 'Object not found')
-            return
+            if not GET:
+                self.send_response(404, 'Object not found')
+                self.end_headers()
+            return 404
         try:
             props = elem.getProperties()
         except:
-            self.send_response(500, "Error retrieving properties")
-            self.end_headers()
-            return
-        if elem is File:
+            if not GET:
+                self.send_response(500, "Error retrieving properties")
+                self.end_headers()
+            return 500
+        if not GET:
+            self.send_response(200, 'OK')
+        if type(elem) == File:
             self.send_header("Content-type", props['getcontenttype'])
             self.send_header("Last-modified", props['getlastmodified'])
         else:
             try:
-                type = props['getcontenttype']
+                ctype = props['getcontenttype']
             except:
-                type = DirCollection.MIME_TYPE
-            self.send_header("Content-type", type)
-        self.send_response(200, 'OK')
-        self.end_headers()
+                ctype = DirCollection.MIME_TYPE
+            self.send_header("Content-type", ctype)
+        if not GET:
+            self.end_headers()
         if DEBUG:
             sys.stderr.write('\n' + str(self.headers) + '\n')
+        return 200
 
     def do_GET(self):
         try:
@@ -195,32 +221,43 @@ class WebDavHandler(BaseHTTPRequestHandler):
         except IOError:
             self.send_error(404,"File Not Found: {}".format(self.path))
         else:
-            self.do_HEAD()
+            self.send_response(201, "Created")
+            self.do_HEAD(GET=True)
+            self.end_headers()
             self.wfile.write(file)
         if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
+            sys.stderr.write(str(file))
+            sys.stderr.write('\n')
 
     def do_PUT(self):
-        if self.path.endswith('/'):
+        try:
+            if 'Content-length' in self.headers:
+                size = int(self.headers['Content-length'])
+            elif 'Transfer-Encoding' in self.headers:
+                if self.headers['Transfer-Encoding'].lower() == 'chunked':
+                    size = -2
+            else:
+                size = -1
+            path, elem = path_elem_prev(self.path)
+            ename = path[-1]
+        except:
             self.send_response(400, 'Cannot parse request')
             self.send_header('Content-length', '0')
             self.end_headers()
             return
         try:
-            file = open(get_absolute_path(self.path), "wb")
-        except IOError:
-            self.send_error(500, 'Cannot save file')
-        else:
-            form = cgi.FieldStorage(fp=self.rfile,
-                                    headers=self.headers,
-                                    environ={'REQUEST_METHOD':'PUT',
-                                             'CONTENT_TYPE':self.headers['Content-Type'],}
-                                    )
-            self.send_response(201, 'Created')
+            elem.saveMember(self.rfile, ename, size, self)
+        except:
+            self.send_response(500, 'Cannot save file')
             self.send_header('Content-length', '0')
             self.end_headers()
-            file.write(form['file'].file.read())
-            file.close()
+            return
+        if size == 0:
+            self.send_response(201, 'Created')
+        else:
+            self.send_response(200, 'OK')
+        #self.send_header('Content-length', '0')
+        self.end_headers()
         if DEBUG:
             sys.stderr.write('\n' + str(self.headers) + '\n')
 
@@ -344,7 +381,10 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
     def do_MOVE(self):
         oldpath = get_absolute_path(self.path)
-        newpath = get_absolute_path(self.headers['Destination'])
+        dest = self.headers['Destination']
+        port = str(self.server.server_port)
+        virtualaddr = dest[dest.find(port) + len(port):]
+        newpath = get_absolute_path(virtualaddr)
         if os.path.isfile(oldpath) and not os.path.isfile(newpath):
             shutil.move(oldpath, newpath)
         if os.path.isdir(oldpath) and not os.path.isdir(newpath):
@@ -369,10 +409,11 @@ FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 ROOT = DirCollection(FILE_PATH, '/')
 ALLOW_DIRS = []
-DEBUG = True
+#DEBUG = True
+DEBUG = False
 
 def get_absolute_path(path):
-    return os.path.join(FILE_PATH, *path.split('/'))
+    return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
 
 def unixdate2iso8601(d):
     tz = timezone / 3600
@@ -383,13 +424,24 @@ def unixdate2httpdate(d):
     return strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(d))
 
 def split_path(path):
-        # split'/dir1/dir2/file' in ['dir1', 'dir2', 'file']
-        out = path.split('/')[1:]
-        while out and out[-1] in ('','/'):
-           out = out[:-1]
-           if len(out) > 0:
-              out[-1] += '/'
-        return out
+    # split'/dir1/dir2/file' in ['dir1/', 'dir2/', 'file']
+    out = path.split('/')[1:]
+    while out and out[-1] in ('', '/'):
+        out = out[:-1]
+        if len(out) > 0:
+            out[-1] += '/'
+    return out
+
+def path_elem_prev(path):
+    # Returns split path (see split_path())
+    # and Member object of the next to last element
+    path = split_path(urllib.parse.unquote(path))
+    elem = ROOT
+    for e in path[:-1]:
+        elem = elem.findMember(e)
+        if elem is None:
+            break
+    return (path, elem)
 
 
 if __name__ == "__main__":
