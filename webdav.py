@@ -16,7 +16,7 @@ class Paths:
         for file in os.listdir(path):
             if file.endswith('.mp3'):
                 audio = EasyID3(file)
-                self.addAudio(audio['artist'][0], audio['album'][0], audio['title'][0], file)
+                self.addAudio(file, *self.getData(file))
                 print(audio['artist'][0], audio['album'][0], audio['title'][0])
 
     def addArtist(self, artist):
@@ -28,7 +28,7 @@ class Paths:
         if album not in self.struct[artist]:
             self.struct[artist][album] = {}
 
-    def addAudio(self, artist, album, audio, filename):
+    def addAudio(self, filename, artist, album, audio):
         self.addAlbum(artist, album)
         if audio not in self.struct[artist][album]:
             self.struct[artist][album][audio] = filename
@@ -40,7 +40,7 @@ class Paths:
         aud = self.alb.get(audio)
         return aud
 
-    def getArtists(self, ):
+    def getArtists(self):
         return self.struct.keys()
 
     def getAlbums(self, artist):
@@ -49,146 +49,27 @@ class Paths:
     def getAudios(self, artist, album):
         alb = self.getAlbums()
         if alb is not None:
-            return  alb.get(album)
+            return alb.get(album)
 
-
-class File:
-    def __init__(self, name, parent):
-        self.name = name
-        self.parent = parent
-        self.realname = parent.realname + name        # '/var/www/mysite/some.txt'
-        self.virtualname = parent.virtualname + name  # '/mysite/some.txt'
-
-    def getProperties(self):
-        st = os.stat(self.realname)
-        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
-                      'getlastmodified': unixdate2httpdate(st.st_mtime),
-                      'displayname': self.name,
-                      'getetag': hashlib.md5(self.realname.encode()).hexdigest(),
-                      'getcontentlength': st.st_size,
-                      'getcontenttype':  mimetypes.guess_type(self.name),
-                      'getcontentlanguage': None, }
-        if self.name[0] == ".":
-            properties['ishidden'] = 1
-        if not os.access(self.realname, os.W_OK):
-            properties['isreadonly'] = 1
-        return properties
-
-
-class DirCollection:
-    MIME_TYPE = 'httpd/unix-directory'
-
-    def __init__(self, realdir, virdir, parent=None):
-        if not os.path.exists(realdir):
-            raise "Local directory (fsdir) not found: " + realdir
-        #self.realname = realdir
-        self.name = virdir
-        if realdir[-1] != os.sep:
-            #if self.realname[-1] == '/':  # fix for win/dos/mac separators
-            #    self.realname = self.realname[:-1] + os.sep
-            #    print(1)
-            #else:
-            #    print(2)
-            self.realname = realdir + os.sep
+    def getBasefile(self, artist=None, album=None):
+        if artist is None:
+            art = list(self.struct.keys())[0]
+            return self.getBasefile(art)
+        if album is None:
+            out = self.struct.values()
         else:
-            self.realname = realdir
+            out = self.struct[album]
+        return list(list(list(out)[0].values())[0].values())[0]
 
-        if virdir[:-1] != os.sep and parent is not None:
-            self.virtualname = virdir + os.sep
-        else:
-            self.virtualname = virdir
-        #if self.virtualname[-1] != '/':
-        #    self.virtualname += '/'
-        self.parent = parent
+    def getData(self, filename, root=False):
+        if not root and filename.endswith('.mp3'):
+            audio = EasyID3(filename)
+            return audio['artist'][0], audio['album'][0], audio['title'][0]
+        elif root:
+            return os.sep, '', ''
 
-    def getProperties(self):
-        st = os.stat(self.realname)
-        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
-                      'getlastmodified': unixdate2httpdate(st.st_mtime),
-                      'displayname': self.name,
-                      'getetag': hashlib.md5(self.realname.encode()).hexdigest(),
-                      'resourcetype': '<D:collection/>',
-                      'iscollection': 1,
-                      'getcontenttype': self.MIME_TYPE, }
-        if self.name[0] == ".":
-            properties['ishidden'] = 1
-        if not os.access(self.realname, os.W_OK):
-            properties['isreadonly'] = 1
-        if self.name == '/':
-            properties['isroot'] = 1
-        return properties
 
-    '''def getMembers(self):
-        members = []
-        for fn in os.listdir(self.realname):
-            if os.path.isdir(self.realname + fn):
-                members.append(DirCollection(self.realname  + '/' + fn,
-                                             self.virtualname + '/' + fn,
-                                             self))
-            else:
-                members.append(File(fn, self))
-        return members'''
-
-    def getMembers(self):
-        members = []
-        for i in os.listdir(self.realname):
-            if os.path.isdir(self.realname + i):
-                members.append(DirCollection(self.realname + i,
-                                             self.virtualname + i,
-                                             self))
-            else:
-                members.append(File(i, self))
-        return members
-
-    '''def getMembers(self):
-        """Get immediate members of this collection."""
-        l = os.listdir(self.realname) # obtain a copy of dirlist
-        tcount=0
-        for tmpi in l:
-            if os.path.isdir(self.realname+tmpi):
-                l[tcount]=l[tcount]+'/'
-            tcount += 1
-        r = []
-        for f in l:
-            if f[-1] != '/':
-                m = File(f, self) # Member is a file
-            else:
-                m = DirCollection(self.realname + f, self.virtualname + f, self) # Member is a collection
-            r.append(m)
-        return r'''
-
-    def findMember(self, name):
-        if name[-1] == os.sep:
-            name = name[:-1]
-        listmembers = os.listdir(self.realname)
-        if name in listmembers:
-            if os.path.isdir(self.realname + name):
-                return DirCollection(self.realname + name,
-                                     self.virtualname + name,
-                                     self)
-            else:
-                return File(name, self)
-        return None
-
-    '''def findMember(self, name):
-        listmembers = os.listdir(self.realname) # obtain a copy of dirlist
-        for i, m in enumerate(listmembers):
-            if os.path.isdir(self.realname + m):
-                listmembers[i] += '/'
-        if name in listmembers:
-            if name[-1] != '/':
-                return File(name, self)
-            else:
-                return DirCollection(self.realname + name,
-                                     self.virtualname + name,
-                                     self)
-        elif name[-1] != '/':
-            name += '/'
-            if name in listmembers:
-                return DirCollection(self.realname + name,
-                                     self.virtualname + name,
-                                     self)'''
-
+'''
     def saveMember(self, rfile, name, size, req):
         # save a member file
         fname = os.path.join(self.realname, urllib.parse.unquote(name))
@@ -207,7 +88,90 @@ class DirCollection:
                 if size != -1 and writ >= size:
                     break
         f.close()
+'''
 
+class File:
+    def __init__(self, name, filename, parent):
+        self.name = name
+        self.basefile = filename
+        self.parent = parent
+
+    def getProperties(self):
+        st = os.stat(self.basefile)
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.basefile,
+                      'getetag': hashlib.md5(self.basefile.encode()).hexdigest(),
+                      'getcontentlength': st.st_size,
+                      'getcontenttype':  mimetypes.guess_type(self.basefile),
+                      'getcontentlanguage': None, }
+        if self.basefile[0] == ".":
+            properties['ishidden'] = 1
+        if not os.access(self.basefile, os.W_OK):
+            properties['isreadonly'] = 1
+        return properties
+
+
+class DirCollection:
+    MIME_TYPE = 'httpd/unix-directory'
+
+    def __init__(self, basefile, type, virtualfs, parent):
+        self.basefile = basefile
+        self.artist, alb, aud = virtualfs.getData(basefile, type == 'root')
+        self.name = self.virtualname = self.artist
+        if type == 'album':
+            self.name = self.album = alb
+            self.virtualname += os.sep + self.album
+        self.parent = parent
+        self.virtualfs = virtualfs
+        self.type = type
+
+    def getProperties(self):
+        st = os.stat(self.basefile)
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.virtualname,
+                      'getetag': hashlib.md5(self.virtualname.encode()).hexdigest(),
+                      'resourcetype': '<D:collection/>',
+                      'iscollection': 1,
+                      'getcontenttype': self.MIME_TYPE, }
+        if self.virtualname[0] == ".":
+            properties['ishidden'] = 1
+        if not os.access(self.basefile, os.W_OK):
+            properties['isreadonly'] = 1
+        if self.parent is None:
+            properties['isroot'] = 1
+        return properties
+
+    def getMembers(self):
+        members = []
+        if type == "album":
+            for audio, filename in self.virtualfs.getAudios(self.artist, self.album):
+                members.append(File(audio, filename, self))
+        elif type == 'artist':
+            for album in self.virtualfs.getAlbums(self.artist):
+                members.append(DirCollection(self.virtualfs.getBasefile(self.artist, album),
+                                   'album', self.virtualfs, self))
+        elif type == 'root':
+            for artist in self.virtualfs.getArtists():
+                members.append(DirCollection(self.virtualfs.getBasefile(artist), 'artist', self.virtualfs, self))
+        return members
+
+    def findMember(self, name):
+        if self.type == 'root':
+            listmembers = self.virtualfs.getArtists()
+        elif self.type == 'artist':
+            listmembers = self.virtualfs.getAlbums(self.artist)
+        elif self.type == 'album':
+            listmembers = self.virtualfs.getAudios(self.artist, self.album)
+
+        if name in listmembers:
+            if self.type == 'album':
+                return File(name, self)
+            elif self.type == 'artist':
+                return DirCollection(self.virtualfs.getBasefile(self.artist), 'album', self.virtualfs, self)
+            elif self.type == 'root':
+                return DirCollection(self.virtualfs.getBasefile(), 'artist', self.virtualfs, self)
 
 
 class BufWriter:
@@ -234,7 +198,7 @@ class BufWriter:
 
 
 class WebDavHandler(BaseHTTPRequestHandler):
-    server_version = 'PythonWebDav 0.1 alpha'
+    server_version = 'PythonAudioServer 0.1 alpha'
     all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly', 'getcontenttype',
                 'contentclass', 'getcontentlanguage', 'creationdate', 'lastaccessed', 'getlastmodified',
                 'getcontentlength', 'iscollection', 'isstructureddocument', 'defaultdocument',
@@ -479,7 +443,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
 FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
-ROOT = DirCollection(FILE_PATH, '/')
+VIRTUALFS = Paths(FILE_PATH)
+ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
 ALLOW_DIRS = []
 DEBUG = True
 #DEBUG = False
