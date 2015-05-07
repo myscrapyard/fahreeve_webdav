@@ -196,7 +196,7 @@ class DirCollection:
                                      self)
             elif self.type == 'album':
                 filename = self.virtualfs.getFilename(self.artist, self.album, name)
-                return File(name, filename ,self)
+                return File(name, filename, self)
 
 
 
@@ -286,7 +286,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
             path = get_absolute_path(self.path)
             file = open(path, "rb").read()
         except IOError:
-            self.send_error(404,"File Not Found: {}".format(self.path))
+            self.send_error(404, "File Not Found: {}".format(self.path))
         else:
             self.send_response(201, "Created")
             self.do_HEAD(GET=True)
@@ -323,7 +323,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
             self.send_response(201, 'Created')
         else:
             self.send_response(200, 'OK')
-        #self.send_header('Content-length', '0')
         self.end_headers()
         if DEBUG:
             sys.stderr.write('\n' + str(self.headers) + '\n')
@@ -344,7 +343,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
             shutil.rmtree(path)
             self.send_response(204, 'No Content')
         else:
-            self.send_response(404,'Not Found')
+            self.send_response(404, 'Not Found')
         self.send_header('Content-length', '0')
         self.end_headers()
         if DEBUG:
@@ -373,28 +372,28 @@ class WebDavHandler(BaseHTTPRequestHandler):
                     wished_props.append(prop.tag[len(ns['D']) + 2:])
         path, elem = self.path_elem()
         if not elem:
-            if len(path) >= 1: # it's a non-existing file
+            if len(path) >= 1:  # it's a non-existing file
                 self.send_response(404, 'Not Found')
                 self.send_header('Content-length', '0')
                 self.end_headers()
                 return
             else:
                 elem = get_absolute_path('')
-        if depth != '0' and not elem:   #or elem.type != Member.M_COLLECTION:
+        if depth != '0' and not elem:
             self.send_response(406, 'This is not allowed')
             self.send_header('Content-length', '0')
             self.end_headers()
             return
-        self.send_response(207, 'Multi-Status')          #Multi-Status
+        self.send_response(207, 'Multi-Status')
         self.send_header('Content-Type', 'text/xml')
-        self.send_header("charset",'"utf-8"')
+        self.send_header("charset", '"utf-8"')
         w = BufWriter(self.wfile, debug=DEBUG, headers=self.headers)
         w.write('<?xml version="1.0" encoding="utf-8" ?>\n')
         w.write('<D:multistatus xmlns:D="DAV:">\n')
         #  xmlns:Z="urn:schemas-microsoft-com:"
         def write_props_member(w, m):
             w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
-            props = m.getProperties()       # get the file or dir props
+            props = m.getProperties()  # get the file or dir props
             if ('quota-available-bytes' in wished_props) or \
                ('quota-used-bytes'in wished_props) or \
                ('quota' in wished_props) or ('quotaused'in wished_props):
@@ -413,7 +412,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
         write_props_member(w, elem)
         if depth == '1':
             for m in elem.getMembers():
-                write_props_member(w,m)
+                write_props_member(w, m)
         w.write('</D:multistatus>')
         self.send_header('Content-Length', str(w.getSize()))
         self.end_headers()
@@ -437,7 +436,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
     def do_COPY(self):
         oldpath = get_absolute_path(self.path)
         newpath = get_absolute_path(self.headers['Destination'])
-        if (os.path.isfile(oldpath)==True):
+        if os.path.isfile(oldpath):
             shutil.copyfile(oldpath, newpath)
         self.send_response(201, "Created")
         self.send_header('Content-length', '0')
@@ -462,26 +461,26 @@ class WebDavHandler(BaseHTTPRequestHandler):
             sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def path_elem(self):
-        #Returns split path and Member object of the last element
+        # Returns split path and Member object of the last element
         path = split_path(urllib.parse.unquote(self.path))
         elem = ROOT
         for e in path:
             elem = elem.findMember(e)
-            if elem == None:
+            if elem is None:
                 break
-        return (path, elem)
+        return path, elem
 
 
 DEBUG = True
-#DEBUG = False
+# DEBUG = False
 FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 VIRTUALFS = Paths(FILE_PATH)
 ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
 ALLOW_DIRS = []
 
+
 def get_absolute_path(path):
-    #return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
     data = split_path(urllib.parse.unquote(path))
     filename = VIRTUALFS.getFilename(data[0], data[1], data[2])
     return os.path.join(FILE_PATH, filename)
@@ -490,16 +489,20 @@ def get_absolute_path(path):
 def real_path(path):
     return path
 
+
 def virt_path(path):
     return path
+
 
 def unixdate2iso8601(d):
     tz = timezone / 3600
     tz = '%+03d' % tz
     return strftime('%Y-%m-%dT%H:%M:%S', localtime(d)) + tz + ':00'
 
+
 def unixdate2httpdate(d):
     return strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(d))
+
 
 def split_path(path):
     # split'/dir1/dir2/file' in ['dir1/', 'dir2/', 'file']
@@ -510,6 +513,7 @@ def split_path(path):
             out[-1] += '/'
     return out
 
+
 def path_elem_prev(path):
     # Returns split path (see split_path())
     # and Member object of the next to last element
@@ -519,7 +523,7 @@ def path_elem_prev(path):
         elem = elem.findMember(e)
         if elem is None:
             break
-    return (path, elem)
+    return path, elem
 
 
 if __name__ == "__main__":
