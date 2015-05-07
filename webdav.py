@@ -14,10 +14,15 @@ class Paths:
 
     def __init__(self, path='.'):
         for file in os.listdir(path):
+            if path != '.':
+                file = path + os.sep + file
             if file.endswith('.mp3'):
                 audio = EasyID3(file)
                 self.addAudio(file, *self.getData(file))
-                print(audio['artist'][0], audio['album'][0], audio['title'][0])
+                if DEBUG:
+                    print("{}:{}:{}".format(audio['artist'][0],
+                                            audio['album'][0],
+                                            audio['title'][0]))
 
     def addArtist(self, artist):
         if artist not in self.struct:
@@ -34,10 +39,13 @@ class Paths:
             self.struct[artist][album][audio] = filename
 
     def getFilename(self, artist, album, audio):
-        alb = self.struct.get(artist)
+        art = self.struct.get(artist)
+        if art is None:
+            return
+        alb = art.get(album)
         if alb is None:
             return
-        aud = self.alb.get(audio)
+        aud = alb.get(audio)
         return aud
 
     def getArtists(self):
@@ -47,7 +55,7 @@ class Paths:
         return self.struct.get(artist)
 
     def getAudios(self, artist, album):
-        alb = self.getAlbums()
+        alb = self.getAlbums(artist)
         if alb is not None:
             return alb.get(album)
 
@@ -56,15 +64,15 @@ class Paths:
             art = list(self.struct.keys())[0]
             return self.getBasefile(art)
         if album is None:
-            out = self.struct.values()
+            out = list(list(self.struct.values())[0].values())[0]
         else:
-            out = self.struct[album]
-        return list(list(list(out)[0].values())[0].values())[0]
+            out = self.struct[artist][album]
+        return list(out.values())[0]
 
     def getData(self, filename, root=False):
         if not root and filename.endswith('.mp3'):
             audio = EasyID3(filename)
-            return audio['artist'][0], audio['album'][0], audio['title'][0]
+            return audio['artist'][0], audio['album'][0], audio['title'][0] + ".mp3"
         elif root:
             return os.sep, '', ''
 
@@ -100,8 +108,8 @@ class File:
         st = os.stat(self.basefile)
         properties = {'creationdate': unixdate2iso8601(st.st_ctime),
                       'getlastmodified': unixdate2httpdate(st.st_mtime),
-                      'displayname': self.basefile,
-                      'getetag': hashlib.md5(self.basefile.encode()).hexdigest(),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.name.encode()).hexdigest(),
                       'getcontentlength': st.st_size,
                       'getcontenttype':  mimetypes.guess_type(self.basefile),
                       'getcontentlanguage': None, }
@@ -130,8 +138,8 @@ class DirCollection:
         st = os.stat(self.basefile)
         properties = {'creationdate': unixdate2iso8601(st.st_ctime),
                       'getlastmodified': unixdate2httpdate(st.st_mtime),
-                      'displayname': self.virtualname,
-                      'getetag': hashlib.md5(self.virtualname.encode()).hexdigest(),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.name.encode()).hexdigest(),
                       'resourcetype': '<D:collection/>',
                       'iscollection': 1,
                       'getcontenttype': self.MIME_TYPE, }
@@ -145,19 +153,29 @@ class DirCollection:
 
     def getMembers(self):
         members = []
-        if type == "album":
-            for audio, filename in self.virtualfs.getAudios(self.artist, self.album):
-                members.append(File(audio, filename, self))
-        elif type == 'artist':
-            for album in self.virtualfs.getAlbums(self.artist):
-                members.append(DirCollection(self.virtualfs.getBasefile(self.artist, album),
-                                   'album', self.virtualfs, self))
-        elif type == 'root':
+        if self.type == 'root':
             for artist in self.virtualfs.getArtists():
-                members.append(DirCollection(self.virtualfs.getBasefile(artist), 'artist', self.virtualfs, self))
+                basefile = self.virtualfs.getBasefile(artist)
+                members += [DirCollection(basefile,
+                                          'artist',
+                                          self.virtualfs,
+                                          self)]
+        elif self.type == 'artist':
+            for album in self.virtualfs.getAlbums(self.artist):
+                basefile = self.virtualfs.getBasefile(self.artist, album)
+                members += [DirCollection(basefile,
+                                          'album',
+                                          self.virtualfs,
+                                          self)]
+        elif self.type == "album":
+            for audio, filename in self.virtualfs.getAudios(self.artist,
+                                                            self.album).items():
+                members += [File(audio, filename, self)]
         return members
 
     def findMember(self, name):
+        if name[-1] == '/':
+            name = name[:-1]
         if self.type == 'root':
             listmembers = self.virtualfs.getArtists()
         elif self.type == 'artist':
@@ -166,12 +184,21 @@ class DirCollection:
             listmembers = self.virtualfs.getAudios(self.artist, self.album)
 
         if name in listmembers:
-            if self.type == 'album':
-                return File(name, self)
+            if self.type == 'root':
+                return DirCollection(self.virtualfs.getBasefile(),
+                                     'artist',
+                                     self.virtualfs,
+                                     self)
             elif self.type == 'artist':
-                return DirCollection(self.virtualfs.getBasefile(self.artist), 'album', self.virtualfs, self)
-            elif self.type == 'root':
-                return DirCollection(self.virtualfs.getBasefile(), 'artist', self.virtualfs, self)
+                return DirCollection(self.virtualfs.getBasefile(self.artist),
+                                     'album',
+                                     self.virtualfs,
+                                     self)
+            elif self.type == 'album':
+                filename = self.virtualfs.getFilename(self.artist, self.album, name)
+                return File(name, filename ,self)
+
+
 
 
 class BufWriter:
@@ -199,11 +226,14 @@ class BufWriter:
 
 class WebDavHandler(BaseHTTPRequestHandler):
     server_version = 'PythonAudioServer 0.1 alpha'
-    all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly', 'getcontenttype',
-                'contentclass', 'getcontentlanguage', 'creationdate', 'lastaccessed', 'getlastmodified',
-                'getcontentlength', 'iscollection', 'isstructureddocument', 'defaultdocument',
-                'displayname', 'isroot', 'resourcetype']
-    basic_props = ['name', 'getcontenttype', 'getcontentlength', 'creationdate', 'iscollection']
+    all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly',
+                 'getcontenttype', 'contentclass', 'getcontentlanguage',
+                 'creationdate', 'lastaccessed', 'getlastmodified',
+                 'getcontentlength', 'iscollection', 'isstructureddocument',
+                 'defaultdocument', 'displayname', 'isroot', 'resourcetype']
+
+    basic_props = ['name', 'getcontenttype', 'getcontentlength',
+                   'creationdate', 'iscollection']
 
     def do_OPTIONS(self):
         self.send_response(200, WebDavHandler.server_version)
@@ -253,7 +283,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         try:
             if not self.path or self.path == "/":
                 raise IOError
-            file = open(get_absolute_path(self.path), "rb").read()
+            path = get_absolute_path(self.path)
+            file = open(path, "rb").read()
         except IOError:
             self.send_error(404,"File Not Found: {}".format(self.path))
         else:
@@ -261,9 +292,9 @@ class WebDavHandler(BaseHTTPRequestHandler):
             self.do_HEAD(GET=True)
             self.end_headers()
             self.wfile.write(file)
-        if DEBUG:
-            sys.stderr.write(str(file))
-            sys.stderr.write('\n')
+            if DEBUG:
+                sys.stderr.write(path)
+        sys.stderr.write('\n')
 
     def do_PUT(self):
         try:
@@ -364,8 +395,9 @@ class WebDavHandler(BaseHTTPRequestHandler):
         def write_props_member(w, m):
             w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
             props = m.getProperties()       # get the file or dir props
-            if ('quota-available-bytes' in wished_props) or ('quota-used-bytes'in wished_props) or \
-                    ('quota' in wished_props) or ('quotaused'in wished_props):
+            if ('quota-available-bytes' in wished_props) or \
+               ('quota-used-bytes'in wished_props) or \
+               ('quota' in wished_props) or ('quotaused'in wished_props):
                 svfs = os.statvfs('/')
                 props['quota-used-bytes'] = (svfs.f_blocks - svfs.f_bavail) * svfs.f_frsize
                 props['quotaused'] = (svfs.f_blocks - svfs.f_bavail) * svfs.f_frsize
@@ -380,8 +412,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
 
         write_props_member(w, elem)
         if depth == '1':
-            if type(elem) == File:
-                pass
             for m in elem.getMembers():
                 write_props_member(w,m)
         w.write('</D:multistatus>')
@@ -441,16 +471,21 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 break
         return (path, elem)
 
+
+DEBUG = True
+#DEBUG = False
 FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 VIRTUALFS = Paths(FILE_PATH)
 ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
 ALLOW_DIRS = []
-DEBUG = True
-#DEBUG = False
 
 def get_absolute_path(path):
-    return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
+    #return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
+    data = split_path(urllib.parse.unquote(path))
+    filename = VIRTUALFS.getFilename(data[0], data[1], data[2])
+    return os.path.join(FILE_PATH, filename)
+
 
 def real_path(path):
     return path
