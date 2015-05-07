@@ -1,4 +1,3 @@
-import cgi
 from http.server import HTTPServer, BaseHTTPRequestHandler, urllib
 import mimetypes
 from time import timezone, strftime, localtime, gmtime
@@ -7,6 +6,50 @@ import os
 import shutil
 from io import StringIO
 import xml.etree.ElementTree as ET
+from mutagen.easyid3 import EasyID3
+
+
+class Paths:
+    struct = {}
+
+    def __init__(self, path='.'):
+        for file in os.listdir(path):
+            if file.endswith('.mp3'):
+                audio = EasyID3(file)
+                self.addAudio(audio['artist'][0], audio['album'][0], audio['title'][0], file)
+                print(audio['artist'][0], audio['album'][0], audio['title'][0])
+
+    def addArtist(self, artist):
+        if artist not in self.struct:
+            self.struct[artist] = {}
+
+    def addAlbum(self, artist, album):
+        self.addArtist(artist)
+        if album not in self.struct[artist]:
+            self.struct[artist][album] = {}
+
+    def addAudio(self, artist, album, audio, filename):
+        self.addAlbum(artist, album)
+        if audio not in self.struct[artist][album]:
+            self.struct[artist][album][audio] = filename
+
+    def getFilename(self, artist, album, audio):
+        alb = self.struct.get(artist)
+        if alb is None:
+            return
+        aud = self.alb.get(audio)
+        return aud
+
+    def getArtists(self, ):
+        return self.struct.keys()
+
+    def getAlbums(self, artist):
+        return self.struct.get(artist)
+
+    def getAudios(self, artist, album):
+        alb = self.getAlbums()
+        if alb is not None:
+            return  alb.get(album)
 
 
 class File:
@@ -18,13 +61,13 @@ class File:
 
     def getProperties(self):
         st = os.stat(self.realname)
-        properties = {'creationdate' : unixdate2iso8601(st.st_ctime),
-                      'getlastmodified' : unixdate2httpdate(st.st_mtime),
-                      'displayname' : self.name,
-                      'getetag' : hashlib.md5(self.realname.encode()).hexdigest(),
-                      'getcontentlength' : st.st_size,
-                      'getcontenttype' :  mimetypes.guess_type(self.name),
-                      'getcontentlanguage' : None,}
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.realname.encode()).hexdigest(),
+                      'getcontentlength': st.st_size,
+                      'getcontenttype':  mimetypes.guess_type(self.name),
+                      'getcontentlanguage': None, }
         if self.name[0] == ".":
             properties['ishidden'] = 1
         if not os.access(self.realname, os.W_OK):
@@ -34,30 +77,39 @@ class File:
 
 class DirCollection:
     MIME_TYPE = 'httpd/unix-directory'
-    def __init__(self, fsdir, virdir, parent=None):
-        if not os.path.exists(fsdir):
-            raise "Local directory (fsdir) not found: " + fsdir
-        self.realname = fsdir
+
+    def __init__(self, realdir, virdir, parent=None):
+        if not os.path.exists(realdir):
+            raise "Local directory (fsdir) not found: " + realdir
+        #self.realname = realdir
         self.name = virdir
-        if self.realname[-1] != os.sep:
-            if self.realname[-1] == '/': # fix for win/dos/mac separators
-                self.realname = self.realname[:-1] + os.sep
-            else:
-                self.realname += os.sep
-        self.virtualname = virdir
-        if self.virtualname[-1] != '/':
-            self.virtualname += '/'
+        if realdir[-1] != os.sep:
+            #if self.realname[-1] == '/':  # fix for win/dos/mac separators
+            #    self.realname = self.realname[:-1] + os.sep
+            #    print(1)
+            #else:
+            #    print(2)
+            self.realname = realdir + os.sep
+        else:
+            self.realname = realdir
+
+        if virdir[:-1] != os.sep and parent is not None:
+            self.virtualname = virdir + os.sep
+        else:
+            self.virtualname = virdir
+        #if self.virtualname[-1] != '/':
+        #    self.virtualname += '/'
         self.parent = parent
 
     def getProperties(self):
         st = os.stat(self.realname)
-        properties = {'creationdate' : unixdate2iso8601(st.st_ctime),
-                      'getlastmodified' : unixdate2httpdate(st.st_mtime),
-                      'displayname' : self.name,
-                      'getetag' : hashlib.md5(self.realname.encode()).hexdigest(),
-                      'resourcetype' : '<D:collection/>',
-                      'iscollection' : 1,
-                      'getcontenttype' : self.MIME_TYPE,}
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.realname.encode()).hexdigest(),
+                      'resourcetype': '<D:collection/>',
+                      'iscollection': 1,
+                      'getcontenttype': self.MIME_TYPE, }
         if self.name[0] == ".":
             properties['ishidden'] = 1
         if not os.access(self.realname, os.W_OK):
@@ -66,18 +118,29 @@ class DirCollection:
             properties['isroot'] = 1
         return properties
 
-    def getMembers(self):
+    '''def getMembers(self):
         members = []
-        for i in range(len(os.listdir(self.realname))):
-            if os.path.isdir(self.realname + members[i]):
-                members.append(DirCollection(self.realname + members[i] + '/',
-                                             self.virtualname + members[i] + '/',
+        for fn in os.listdir(self.realname):
+            if os.path.isdir(self.realname + fn):
+                members.append(DirCollection(self.realname  + '/' + fn,
+                                             self.virtualname + '/' + fn,
                                              self))
             else:
-                members.append(File(members[i], self))
-        return members
+                members.append(File(fn, self))
+        return members'''
 
     def getMembers(self):
+        members = []
+        for i in os.listdir(self.realname):
+            if os.path.isdir(self.realname + i):
+                members.append(DirCollection(self.realname + i,
+                                             self.virtualname + i,
+                                             self))
+            else:
+                members.append(File(i, self))
+        return members
+
+    '''def getMembers(self):
         """Get immediate members of this collection."""
         l = os.listdir(self.realname) # obtain a copy of dirlist
         tcount=0
@@ -92,12 +155,25 @@ class DirCollection:
             else:
                 m = DirCollection(self.realname + f, self.virtualname + f, self) # Member is a collection
             r.append(m)
-        return r
+        return r'''
 
     def findMember(self, name):
+        if name[-1] == os.sep:
+            name = name[:-1]
+        listmembers = os.listdir(self.realname)
+        if name in listmembers:
+            if os.path.isdir(self.realname + name):
+                return DirCollection(self.realname + name,
+                                     self.virtualname + name,
+                                     self)
+            else:
+                return File(name, self)
+        return None
+
+    '''def findMember(self, name):
         listmembers = os.listdir(self.realname) # obtain a copy of dirlist
-        for i in range(len(listmembers)):
-            if os.path.isdir(self.realname + listmembers[i]):
+        for i, m in enumerate(listmembers):
+            if os.path.isdir(self.realname + m):
                 listmembers[i] += '/'
         if name in listmembers:
             if name[-1] != '/':
@@ -111,7 +187,7 @@ class DirCollection:
             if name in listmembers:
                 return DirCollection(self.realname + name,
                                      self.virtualname + name,
-                                     self)
+                                     self)'''
 
     def saveMember(self, rfile, name, size, req):
         # save a member file
@@ -179,10 +255,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.do_PUT()
 
     def do_HEAD(self, GET=False):
-        #self.send_response(200)
-        #self.send_header('Content-length', '0')
-        #self.end_headers()
-
         path, elem = self.path_elem()
         if not elem:
             if not GET:
@@ -323,8 +395,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.send_header("charset",'"utf-8"')
         w = BufWriter(self.wfile, debug=DEBUG, headers=self.headers)
         w.write('<?xml version="1.0" encoding="utf-8" ?>\n')
-        w.write('<D:multistatus xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">\n')
-
+        w.write('<D:multistatus xmlns:D="DAV:">\n')
+        #  xmlns:Z="urn:schemas-microsoft-com:"
         def write_props_member(w, m):
             w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
             props = m.getProperties()       # get the file or dir props
@@ -409,11 +481,17 @@ FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 ROOT = DirCollection(FILE_PATH, '/')
 ALLOW_DIRS = []
-#DEBUG = True
-DEBUG = False
+DEBUG = True
+#DEBUG = False
 
 def get_absolute_path(path):
     return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
+
+def real_path(path):
+    return path
+
+def virt_path(path):
+    return path
 
 def unixdate2iso8601(d):
     tz = timezone / 3600
