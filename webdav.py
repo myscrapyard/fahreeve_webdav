@@ -3,7 +3,6 @@ import mimetypes
 from time import timezone, strftime, localtime, gmtime
 import hashlib
 import os
-import shutil
 from io import StringIO
 import xml.etree.ElementTree as ET
 from mutagen.easyid3 import EasyID3
@@ -69,34 +68,14 @@ class Paths:
             out = self.struct[artist][album]
         return list(out.values())[0]
 
-    def getData(self, filename, root=False):
+    @staticmethod
+    def getData(filename, root=False):
         if not root and filename.endswith('.mp3'):
             audio = EasyID3(filename)
             return audio['artist'][0], audio['album'][0], audio['title'][0] + ".mp3"
         elif root:
             return os.sep, '', ''
 
-
-'''
-    def saveMember(self, rfile, name, size, req):
-        # save a member file
-        fname = os.path.join(self.realname, urllib.parse.unquote(name))
-        f = open(fname, 'wb')
-        if size > 0:    # if size=0 ,just save a empty file.
-            writ = 0
-            bs = 65536
-            while True:
-                if size != -1 and (bs > size - writ):
-                    bs = size - writ
-                buf = rfile.read(bs)
-                if len(buf) == 0:
-                    break
-                f.write(buf)
-                writ += len(buf)
-                if size != -1 and writ >= size:
-                    break
-        f.close()
-'''
 
 class File:
     def __init__(self, name, filename, parent):
@@ -199,8 +178,6 @@ class DirCollection:
                 return File(name, filename, self)
 
 
-
-
 class BufWriter:
     def __init__(self, w, debug=True, headers=None):
         self.w = w
@@ -244,9 +221,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if DEBUG:
             sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_POST(self):
-        self.do_PUT()
 
     def do_HEAD(self, GET=False):
         path, elem = self.path_elem()
@@ -296,59 +270,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 sys.stderr.write(path)
         sys.stderr.write('\n')
 
-    def do_PUT(self):
-        try:
-            if 'Content-length' in self.headers:
-                size = int(self.headers['Content-length'])
-            elif 'Transfer-Encoding' in self.headers:
-                if self.headers['Transfer-Encoding'].lower() == 'chunked':
-                    size = -2
-            else:
-                size = -1
-            path, elem = path_elem_prev(self.path)
-            ename = path[-1]
-        except:
-            self.send_response(400, 'Cannot parse request')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-        try:
-            elem.saveMember(self.rfile, ename, size, self)
-        except:
-            self.send_response(500, 'Cannot save file')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-        if size == 0:
-            self.send_response(201, 'Created')
-        else:
-            self.send_response(200, 'OK')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_DELETE(self):
-        if self.path == '' or self.path == '/':
-            self.send_error(404, 'Object not found')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-
-        path = get_absolute_path(self.path)
-
-        if os.path.isfile(path):
-            os.remove(path)
-            self.send_response(204, 'No Content')
-        elif os.path.isdir(path):
-            shutil.rmtree(path)
-            self.send_response(204, 'No Content')
-        else:
-            self.send_response(404, 'Not Found')
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
     def do_PROPFIND(self):
         depth = 'infinity'
         if 'Depth' in self.headers:
@@ -390,7 +311,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
         w = BufWriter(self.wfile, debug=DEBUG, headers=self.headers)
         w.write('<?xml version="1.0" encoding="utf-8" ?>\n')
         w.write('<D:multistatus xmlns:D="DAV:">\n')
-        #  xmlns:Z="urn:schemas-microsoft-com:"
         def write_props_member(w, m):
             w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
             props = m.getProperties()  # get the file or dir props
@@ -418,47 +338,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
         self.end_headers()
         w.flush()
 
-    def do_MKCOL(self):
-        if self.path != '' or self.path != '/':
-            path = get_absolute_path(self.path)
-            if not os.path.isdir(path):
-                os.mkdir(path)
-                self.send_response(201, "Created")
-                self.send_header('Content-length', '0')
-                self.end_headers()
-                return
-        self.send_response(403, "OK")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_COPY(self):
-        oldpath = get_absolute_path(self.path)
-        newpath = get_absolute_path(self.headers['Destination'])
-        if os.path.isfile(oldpath):
-            shutil.copyfile(oldpath, newpath)
-        self.send_response(201, "Created")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_MOVE(self):
-        oldpath = get_absolute_path(self.path)
-        dest = self.headers['Destination']
-        port = str(self.server.server_port)
-        virtualaddr = dest[dest.find(port) + len(port):]
-        newpath = get_absolute_path(virtualaddr)
-        if os.path.isfile(oldpath) and not os.path.isfile(newpath):
-            shutil.move(oldpath, newpath)
-        if os.path.isdir(oldpath) and not os.path.isdir(newpath):
-            os.rename(oldpath, newpath)
-        self.send_response(201, "Created")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def path_elem(self):
         # Returns split path and Member object of the last element
