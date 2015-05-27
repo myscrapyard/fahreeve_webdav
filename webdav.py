@@ -1,137 +1,181 @@
-import cgi
 from http.server import HTTPServer, BaseHTTPRequestHandler, urllib
 import mimetypes
 from time import timezone, strftime, localtime, gmtime
 import hashlib
 import os
-import shutil
 from io import StringIO
 import xml.etree.ElementTree as ET
+from mutagen.easyid3 import EasyID3
+
+
+class Paths:
+    struct = {}
+
+    def __init__(self, path='.'):
+        for file in os.listdir(path):
+            if path != '.':
+                file = path + os.sep + file
+            if file.endswith('.mp3'):
+                audio = EasyID3(file)
+                self.addAudio(file, *self.getData(file))
+                if DEBUG:
+                    print("{}:{}:{}".format(audio['artist'][0],
+                                            audio['album'][0],
+                                            audio['title'][0]))
+
+    def addArtist(self, artist):
+        if artist not in self.struct:
+            self.struct[artist] = {}
+
+    def addAlbum(self, artist, album):
+        self.addArtist(artist)
+        if album not in self.struct[artist]:
+            self.struct[artist][album] = {}
+
+    def addAudio(self, filename, artist, album, audio):
+        self.addAlbum(artist, album)
+        if audio not in self.struct[artist][album]:
+            self.struct[artist][album][audio] = filename
+
+    def getFilename(self, artist, album, audio):
+        art = self.struct.get(artist)
+        if art is None:
+            return
+        alb = art.get(album)
+        if alb is None:
+            return
+        aud = alb.get(audio)
+        return aud
+
+    def getArtists(self):
+        return self.struct.keys()
+
+    def getAlbums(self, artist):
+        return self.struct.get(artist)
+
+    def getAudios(self, artist, album):
+        alb = self.getAlbums(artist)
+        if alb is not None:
+            return alb.get(album)
+
+    def getBasefile(self, artist=None, album=None):
+        if artist is None:
+            art = list(self.struct.keys())[0]
+            return self.getBasefile(art)
+        if album is None:
+            out = list(list(self.struct.values())[0].values())[0]
+        else:
+            out = self.struct[artist][album]
+        return list(out.values())[0]
+
+    @staticmethod
+    def getData(filename, root=False):
+        if not root and filename.endswith('.mp3'):
+            audio = EasyID3(filename)
+            return audio['artist'][0], audio['album'][0], audio['title'][0] + ".mp3"
+        elif root:
+            return os.sep, '', ''
 
 
 class File:
-    def __init__(self, name, parent):
+    def __init__(self, name, filename, parent):
         self.name = name
+        self.basefile = filename
         self.parent = parent
-        self.realname = parent.realname + name        # '/var/www/mysite/some.txt'
-        self.virtualname = parent.virtualname + name  # '/mysite/some.txt'
 
     def getProperties(self):
-        st = os.stat(self.realname)
-        properties = {'creationdate' : unixdate2iso8601(st.st_ctime),
-                      'getlastmodified' : unixdate2httpdate(st.st_mtime),
-                      'displayname' : self.name,
-                      'getetag' : hashlib.md5(self.realname.encode()).hexdigest(),
-                      'getcontentlength' : st.st_size,
-                      'getcontenttype' :  mimetypes.guess_type(self.name),
-                      'getcontentlanguage' : None,}
-        if self.name[0] == ".":
+        st = os.stat(self.basefile)
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.name.encode()).hexdigest(),
+                      'getcontentlength': st.st_size,
+                      'getcontenttype':  mimetypes.guess_type(self.basefile)[0],
+                      'getcontentlanguage': None, }
+        if self.basefile[0] == ".":
             properties['ishidden'] = 1
-        if not os.access(self.realname, os.W_OK):
+        if not os.access(self.basefile, os.W_OK):
             properties['isreadonly'] = 1
         return properties
 
 
 class DirCollection:
     MIME_TYPE = 'httpd/unix-directory'
-    def __init__(self, fsdir, virdir, parent=None):
-        if not os.path.exists(fsdir):
-            raise "Local directory (fsdir) not found: " + fsdir
-        self.realname = fsdir
-        self.name = virdir
-        if self.realname[-1] != os.sep:
-            if self.realname[-1] == '/': # fix for win/dos/mac separators
-                self.realname = self.realname[:-1] + os.sep
-            else:
-                self.realname += os.sep
-        self.virtualname = virdir
-        if self.virtualname[-1] != '/':
-            self.virtualname += '/'
+
+    def __init__(self, basefile, type, virtualfs, parent):
+        self.basefile = basefile
+        self.artist, alb, aud = virtualfs.getData(basefile, type == 'root')
+        self.name = self.virtualname = self.artist
+        if type == 'album':
+            self.name = self.album = alb
+            self.virtualname += os.sep + self.album
         self.parent = parent
+        self.virtualfs = virtualfs
+        self.type = type
 
     def getProperties(self):
-        st = os.stat(self.realname)
-        properties = {'creationdate' : unixdate2iso8601(st.st_ctime),
-                      'getlastmodified' : unixdate2httpdate(st.st_mtime),
-                      'displayname' : self.name,
-                      'getetag' : hashlib.md5(self.realname.encode()).hexdigest(),
-                      'resourcetype' : '<D:collection/>',
-                      'iscollection' : 1,
-                      'getcontenttype' : self.MIME_TYPE,}
-        if self.name[0] == ".":
+        st = os.stat(self.basefile)
+        properties = {'creationdate': unixdate2iso8601(st.st_ctime),
+                      'getlastmodified': unixdate2httpdate(st.st_mtime),
+                      'displayname': self.name,
+                      'getetag': hashlib.md5(self.name.encode()).hexdigest(),
+                      'resourcetype': '<D:collection/>',
+                      'iscollection': 1,
+                      'getcontenttype': self.MIME_TYPE, }
+        if self.virtualname[0] == ".":
             properties['ishidden'] = 1
-        if not os.access(self.realname, os.W_OK):
+        if not os.access(self.basefile, os.W_OK):
             properties['isreadonly'] = 1
-        if self.name == '/':
+        if self.parent is None:
             properties['isroot'] = 1
         return properties
 
     def getMembers(self):
         members = []
-        for i in range(len(os.listdir(self.realname))):
-            if os.path.isdir(self.realname + members[i]):
-                members.append(DirCollection(self.realname + members[i] + '/',
-                                             self.virtualname + members[i] + '/',
-                                             self))
-            else:
-                members.append(File(members[i], self))
+        if self.type == 'root':
+            for artist in self.virtualfs.getArtists():
+                basefile = self.virtualfs.getBasefile(artist)
+                members += [DirCollection(basefile,
+                                          'artist',
+                                          self.virtualfs,
+                                          self)]
+        elif self.type == 'artist':
+            for album in self.virtualfs.getAlbums(self.artist):
+                basefile = self.virtualfs.getBasefile(self.artist, album)
+                members += [DirCollection(basefile,
+                                          'album',
+                                          self.virtualfs,
+                                          self)]
+        elif self.type == "album":
+            for audio, filename in self.virtualfs.getAudios(self.artist,
+                                                            self.album).items():
+                members += [File(audio, filename, self)]
         return members
 
-    def getMembers(self):
-        """Get immediate members of this collection."""
-        l = os.listdir(self.realname) # obtain a copy of dirlist
-        tcount=0
-        for tmpi in l:
-            if os.path.isdir(self.realname+tmpi):
-                l[tcount]=l[tcount]+'/'
-            tcount += 1
-        r = []
-        for f in l:
-            if f[-1] != '/':
-                m = File(f, self) # Member is a file
-            else:
-                m = DirCollection(self.realname + f, self.virtualname + f, self) # Member is a collection
-            r.append(m)
-        return r
-
     def findMember(self, name):
-        listmembers = os.listdir(self.realname) # obtain a copy of dirlist
-        for i in range(len(listmembers)):
-            if os.path.isdir(self.realname + listmembers[i]):
-                listmembers[i] += '/'
+        if name[-1] == '/':
+            name = name[:-1]
+        if self.type == 'root':
+            listmembers = self.virtualfs.getArtists()
+        elif self.type == 'artist':
+            listmembers = self.virtualfs.getAlbums(self.artist)
+        elif self.type == 'album':
+            listmembers = self.virtualfs.getAudios(self.artist, self.album)
+
         if name in listmembers:
-            if name[-1] != '/':
-                return File(name, self)
-            else:
-                return DirCollection(self.realname + name,
-                                     self.virtualname + name,
+            if self.type == 'root':
+                return DirCollection(self.virtualfs.getBasefile(),
+                                     'artist',
+                                     self.virtualfs,
                                      self)
-        elif name[-1] != '/':
-            name += '/'
-            if name in listmembers:
-                return DirCollection(self.realname + name,
-                                     self.virtualname + name,
+            elif self.type == 'artist':
+                return DirCollection(self.virtualfs.getBasefile(self.artist),
+                                     'album',
+                                     self.virtualfs,
                                      self)
-
-    def saveMember(self, rfile, name, size, req):
-        # save a member file
-        fname = os.path.join(self.realname, urllib.parse.unquote(name))
-        f = open(fname, 'wb')
-        if size > 0:    # if size=0 ,just save a empty file.
-            writ = 0
-            bs = 65536
-            while True:
-                if size != -1 and (bs > size - writ):
-                    bs = size - writ
-                buf = rfile.read(bs)
-                if len(buf) == 0:
-                    break
-                f.write(buf)
-                writ += len(buf)
-                if size != -1 and writ >= size:
-                    break
-        f.close()
-
+            elif self.type == 'album':
+                filename = self.virtualfs.getFilename(self.artist, self.album, name)
+                return File(name, filename, self)
 
 
 class BufWriter:
@@ -158,12 +202,15 @@ class BufWriter:
 
 
 class WebDavHandler(BaseHTTPRequestHandler):
-    server_version = 'PythonWebDav 0.1 alpha'
-    all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly', 'getcontenttype',
-                'contentclass', 'getcontentlanguage', 'creationdate', 'lastaccessed', 'getlastmodified',
-                'getcontentlength', 'iscollection', 'isstructureddocument', 'defaultdocument',
-                'displayname', 'isroot', 'resourcetype']
-    basic_props = ['name', 'getcontenttype', 'getcontentlength', 'creationdate', 'iscollection']
+    server_version = 'PythonAudioServer 0.1 alpha'
+    all_props = ['name', 'parentname', 'href', 'ishidden', 'isreadonly',
+                 'getcontenttype', 'contentclass', 'getcontentlanguage',
+                 'creationdate', 'lastaccessed', 'getlastmodified',
+                 'getcontentlength', 'iscollection', 'isstructureddocument',
+                 'defaultdocument', 'displayname', 'isroot', 'resourcetype']
+
+    basic_props = ['name', 'getcontenttype', 'getcontentlength',
+                   'creationdate', 'iscollection']
 
     def do_OPTIONS(self):
         self.send_response(200, WebDavHandler.server_version)
@@ -175,14 +222,7 @@ class WebDavHandler(BaseHTTPRequestHandler):
         if DEBUG:
             sys.stderr.write('\n' + str(self.headers) + '\n')
 
-    def do_POST(self):
-        self.do_PUT()
-
     def do_HEAD(self, GET=False):
-        #self.send_response(200)
-        #self.send_header('Content-length', '0')
-        #self.end_headers()
-
         path, elem = self.path_elem()
         if not elem:
             if not GET:
@@ -217,71 +257,18 @@ class WebDavHandler(BaseHTTPRequestHandler):
         try:
             if not self.path or self.path == "/":
                 raise IOError
-            file = open(get_absolute_path(self.path), "rb").read()
+            path = get_absolute_path(self.path)
+            file = open(path, "rb").read()
         except IOError:
-            self.send_error(404,"File Not Found: {}".format(self.path))
+            self.send_error(404, "File Not Found: {}".format(self.path))
         else:
             self.send_response(201, "Created")
             self.do_HEAD(GET=True)
             self.end_headers()
             self.wfile.write(file)
-        if DEBUG:
-            sys.stderr.write(str(file))
-            sys.stderr.write('\n')
-
-    def do_PUT(self):
-        try:
-            if 'Content-length' in self.headers:
-                size = int(self.headers['Content-length'])
-            elif 'Transfer-Encoding' in self.headers:
-                if self.headers['Transfer-Encoding'].lower() == 'chunked':
-                    size = -2
-            else:
-                size = -1
-            path, elem = path_elem_prev(self.path)
-            ename = path[-1]
-        except:
-            self.send_response(400, 'Cannot parse request')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-        try:
-            elem.saveMember(self.rfile, ename, size, self)
-        except:
-            self.send_response(500, 'Cannot save file')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-        if size == 0:
-            self.send_response(201, 'Created')
-        else:
-            self.send_response(200, 'OK')
-        #self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_DELETE(self):
-        if self.path == '' or self.path == '/':
-            self.send_error(404, 'Object not found')
-            self.send_header('Content-length', '0')
-            self.end_headers()
-            return
-
-        path = get_absolute_path(self.path)
-
-        if os.path.isfile(path):
-            os.remove(path)
-            self.send_response(204, 'No Content')
-        elif os.path.isdir(path):
-            shutil.rmtree(path)
-            self.send_response(204, 'No Content')
-        else:
-            self.send_response(404,'Not Found')
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
+            if DEBUG:
+                sys.stderr.write(path)
+        sys.stderr.write('\n')
 
     def do_PROPFIND(self):
         depth = 'infinity'
@@ -306,30 +293,30 @@ class WebDavHandler(BaseHTTPRequestHandler):
                     wished_props.append(prop.tag[len(ns['D']) + 2:])
         path, elem = self.path_elem()
         if not elem:
-            if len(path) >= 1: # it's a non-existing file
+            if len(path) >= 1:  # it's a non-existing file
                 self.send_response(404, 'Not Found')
                 self.send_header('Content-length', '0')
                 self.end_headers()
                 return
             else:
                 elem = get_absolute_path('')
-        if depth != '0' and not elem:   #or elem.type != Member.M_COLLECTION:
+        if depth != '0' and not elem:
             self.send_response(406, 'This is not allowed')
             self.send_header('Content-length', '0')
             self.end_headers()
             return
-        self.send_response(207, 'Multi-Status')          #Multi-Status
+        self.send_response(207, 'Multi-Status')
         self.send_header('Content-Type', 'text/xml')
-        self.send_header("charset",'"utf-8"')
+        self.send_header("charset", '"utf-8"')
         w = BufWriter(self.wfile, debug=DEBUG, headers=self.headers)
         w.write('<?xml version="1.0" encoding="utf-8" ?>\n')
-        w.write('<D:multistatus xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">\n')
-
+        w.write('<D:multistatus xmlns:D="DAV:">\n')
         def write_props_member(w, m):
             w.write('<D:response>\n<D:href>{}</D:href>\n<D:propstat>\n<D:prop>\n'.format(m.name))
-            props = m.getProperties()       # get the file or dir props
-            if ('quota-available-bytes' in wished_props) or ('quota-used-bytes'in wished_props) or \
-                    ('quota' in wished_props) or ('quotaused'in wished_props):
+            props = m.getProperties()  # get the file or dir props
+            if ('quota-available-bytes' in wished_props) or \
+               ('quota-used-bytes'in wished_props) or \
+               ('quota' in wished_props) or ('quotaused'in wished_props):
                 svfs = os.statvfs('/')
                 props['quota-used-bytes'] = (svfs.f_blocks - svfs.f_bavail) * svfs.f_frsize
                 props['quotaused'] = (svfs.f_blocks - svfs.f_bavail) * svfs.f_frsize
@@ -341,87 +328,60 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 else:
                     w.write('  <D:{tag}>{text}</D:{tag}>\n'.format(tag=i, text=str(props[i])))
             w.write('</D:prop>\n<D:status>HTTP/1.1 200 OK</D:status>\n</D:propstat>\n</D:response>\n')
-
-        write_props_member(w, elem)
+        if depth == 0:
+            write_props_member(w, elem)
         if depth == '1':
-            if type(elem) == File:
-                pass
             for m in elem.getMembers():
-                write_props_member(w,m)
+                write_props_member(w, m)
         w.write('</D:multistatus>')
         self.send_header('Content-Length', str(w.getSize()))
         self.end_headers()
         w.flush()
 
-    def do_MKCOL(self):
-        if self.path != '' or self.path != '/':
-            path = get_absolute_path(self.path)
-            if not os.path.isdir(path):
-                os.mkdir(path)
-                self.send_response(201, "Created")
-                self.send_header('Content-length', '0')
-                self.end_headers()
-                return
-        self.send_response(403, "OK")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_COPY(self):
-        oldpath = get_absolute_path(self.path)
-        newpath = get_absolute_path(self.headers['Destination'])
-        if (os.path.isfile(oldpath)==True):
-            shutil.copyfile(oldpath, newpath)
-        self.send_response(201, "Created")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
-
-    def do_MOVE(self):
-        oldpath = get_absolute_path(self.path)
-        dest = self.headers['Destination']
-        port = str(self.server.server_port)
-        virtualaddr = dest[dest.find(port) + len(port):]
-        newpath = get_absolute_path(virtualaddr)
-        if os.path.isfile(oldpath) and not os.path.isfile(newpath):
-            shutil.move(oldpath, newpath)
-        if os.path.isdir(oldpath) and not os.path.isdir(newpath):
-            os.rename(oldpath, newpath)
-        self.send_response(201, "Created")
-        self.send_header('Content-length', '0')
-        self.end_headers()
-        if DEBUG:
-            sys.stderr.write('\n' + str(self.headers) + '\n')
 
     def path_elem(self):
-        #Returns split path and Member object of the last element
+        # Returns split path and Member object of the last element
         path = split_path(urllib.parse.unquote(self.path))
         elem = ROOT
         for e in path:
             elem = elem.findMember(e)
-            if elem == None:
+            if elem is None:
                 break
-        return (path, elem)
+        return path, elem
 
-FILE_DIR = "files"
-FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
-ROOT = DirCollection(FILE_PATH, '/')
-ALLOW_DIRS = []
+
 #DEBUG = True
 DEBUG = False
+FILE_DIR = "files"
+FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
+VIRTUALFS = Paths(FILE_PATH)
+ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
+ALLOW_DIRS = []
+
 
 def get_absolute_path(path):
-    return os.path.join(FILE_PATH, *urllib.parse.unquote(path).split('/'))
+    data = split_path(urllib.parse.unquote(path))
+    filename = VIRTUALFS.getFilename(data[0], data[1], data[2])
+    return os.path.join(FILE_PATH, filename)
+
+
+def real_path(path):
+    return path
+
+
+def virt_path(path):
+    return path
+
 
 def unixdate2iso8601(d):
     tz = timezone / 3600
     tz = '%+03d' % tz
     return strftime('%Y-%m-%dT%H:%M:%S', localtime(d)) + tz + ':00'
 
+
 def unixdate2httpdate(d):
     return strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(d))
+
 
 def split_path(path):
     # split'/dir1/dir2/file' in ['dir1/', 'dir2/', 'file']
@@ -432,6 +392,7 @@ def split_path(path):
             out[-1] += '/'
     return out
 
+
 def path_elem_prev(path):
     # Returns split path (see split_path())
     # and Member object of the next to last element
@@ -441,7 +402,7 @@ def path_elem_prev(path):
         elem = elem.findMember(e)
         if elem is None:
             break
-    return (path, elem)
+    return path, elem
 
 
 if __name__ == "__main__":
