@@ -90,7 +90,7 @@ class File:
                       'displayname': self.name,
                       'getetag': hashlib.md5(self.name.encode()).hexdigest(),
                       'getcontentlength': st.st_size,
-                      'getcontenttype':  mimetypes.guess_type(self.basefile),
+                      'getcontenttype':  mimetypes.guess_type(self.basefile)[0],
                       'getcontentlanguage': None, }
         if self.basefile[0] == ".":
             properties['ishidden'] = 1
@@ -328,8 +328,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
                 else:
                     w.write('  <D:{tag}>{text}</D:{tag}>\n'.format(tag=i, text=str(props[i])))
             w.write('</D:prop>\n<D:status>HTTP/1.1 200 OK</D:status>\n</D:propstat>\n</D:response>\n')
-
-        write_props_member(w, elem)
+        if depth == 0:
+            write_props_member(w, elem)
         if depth == '1':
             for m in elem.getMembers():
                 write_props_member(w, m)
@@ -350,8 +350,8 @@ class WebDavHandler(BaseHTTPRequestHandler):
         return path, elem
 
 
-DEBUG = True
-# DEBUG = False
+#DEBUG = True
+DEBUG = False
 FILE_DIR = "files"
 FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
 VIRTUALFS = Paths(FILE_PATH)
