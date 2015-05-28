@@ -72,7 +72,10 @@ class Paths:
     def getData(filename, root=False):
         if not root and filename.endswith('.mp3'):
             audio = EasyID3(filename)
-            return audio['artist'][0], audio['album'][0], audio['title'][0] + ".mp3"
+            artist = audio.get('artist', ('noname',))[0]
+            album = audio.get('album', ('noname',))[0]
+            title = audio.get('title')[0]
+            return artist, album, title + ".mp3"
         elif root:
             return os.sep, '', ''
 
