@@ -73,9 +73,15 @@ class Paths:
         if not root and filename.endswith('.mp3'):
             audio = EasyID3(filename)
             artist = audio.get('artist', ('noname',))[0]
+            if "http" in artist:
+                artist = 'noname'
             album = audio.get('album', ('noname',))[0]
-            title = audio.get('title')[0]
-            return artist, album, title + ".mp3"
+            if "http" in album:
+                album = 'noname'
+            title = audio.get('title', (filename,))[0] + ".mp3"
+            if "http" in title:
+                title = filename
+            return artist, album, title
         elif root:
             return os.sep, '', ''
 
@@ -353,15 +359,6 @@ class WebDavHandler(BaseHTTPRequestHandler):
         return path, elem
 
 
-#DEBUG = True
-DEBUG = False
-FILE_DIR = "files"
-FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
-VIRTUALFS = Paths(FILE_PATH)
-ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
-ALLOW_DIRS = []
-
-
 def get_absolute_path(path):
     data = split_path(urllib.parse.unquote(path))
     filename = VIRTUALFS.getFilename(data[0], data[1], data[2])
@@ -412,18 +409,48 @@ if __name__ == "__main__":
     import sys
     args = sys.argv[1:]
     port = 8080
-    if '-p' in args:
-        i = args.index('-p')
+    url = "127.0.1.1"
+    DEBUG = False
+    FILE_DIR = "files"
+    keys = ['--port', '--url', '--dir', '--full-path', '--debug', '--help']
+    for key in args:
+        if key not in keys:
+            print("no such option: {}".format(key))
+            exit()
+    if '--help' in args:
+        help = """
+        --help             Show help
+        --port <port>      Change port
+        --url <url>        Change local ip address
+        --dir <dir>        Change dirname with all mp3 files, deafult name is {filedir}
+        --full-path <path> Change full path to dir with mp3 files. Deafult path is /path to webdav.py/{filedir}
+        --debug            Run server in debug mode
+        """.format(filedir=FILE_DIR)
+        print(help)
+        exit()
+    if '--port' in args:
+        i = args.index('--port')
         port = int(args[i + 1])
-    if '-u' in args:
-        i = args.index('-u')
+    if '--url' in args:
+        i = args.index('--url')
         url = args[i + 1]
+    if '--dir' in args:
+        i = args.index('--dir')
+        FILE_DIR = args[i + 1]
+    if '--full-path' in args:
+        i = args.index('--full-path')
+        FILE_PATH = args[i + 1]
     else:
-        url = ''
+        FILE_PATH = os.path.join(os.getcwd(), FILE_DIR)
+    if '--debug' in args:
+        DEBUG = True
+    VIRTUALFS = Paths(FILE_PATH)
+    ROOT = DirCollection(FILE_PATH, 'root', VIRTUALFS, None)
     try:
         server = HTTPServer((url, port), WebDavHandler)
-        print("started webdav server: http://127.0.1.1:{}".format(port))
+        print("Start webdav server: {}:{}".format(url, port), "in DEBUG mode" if DEBUG else "")
+        print("Path to music files:", FILE_PATH)
         server.serve_forever()
     except KeyboardInterrupt:
-        print("received, shutting down server")
+        print("Received, shutting down server")
         server.shutdown()
