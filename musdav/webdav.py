@@ -405,7 +405,7 @@ def path_elem_prev(path):
     return path, elem
 
 
-if __name__ == "__main__":
+def runserver():
     import sys
     args = sys.argv[1:]
     port = 8080

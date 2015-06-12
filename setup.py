@@ -3,8 +3,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='webdav-audio',
-    version='0.1-alpha',
+    name='musdav',
+    version='0.1.3',
 
     author='Eldar Fahreev',
     author_email='fahreeve@yandex.ru',
