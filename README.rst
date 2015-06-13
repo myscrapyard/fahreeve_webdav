@@ -16,10 +16,14 @@ Usage
 
 make dir "files" - default name
 make .py file and write this:
+
 .. code:: python
-    from musdav import runserver
+
+    from musdav import runserver  
     runserver()
 
 run the file:
+
 .. code:: bash
+
     python3 youfile.py --help
